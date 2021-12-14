@@ -2,9 +2,10 @@
 
 #include "server.h"
 
+#include <lib/stb_ds.h>
+
 #include <sys/mman.h>
 #include <stddef.h>
-#include <lib/stb_ds.h>
 
 typedef struct free_buffer {
     struct free_buffer* next;

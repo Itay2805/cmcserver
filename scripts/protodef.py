@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import random
 import re
 import sys
 from typing import *
@@ -50,23 +51,23 @@ class ProtoDefTypedef(ProtoDefBase):
 
     def gen_read_code(self, destination: str) -> str:
         if self.is_variable():
-            return f'read_size = protocol_read_{self._name}(buffer, size, &{destination});' \
+            return f'read_size = protocol_read_{self._name}(arena, data, size, &{destination});' \
                    f'if (read_size < 0) return -1;' \
-                   f'buffer += read_size;' \
+                   f'data += read_size;' \
                    f'size -= read_size;'
         else:
-            return f'{destination} = protocol_read_{self._name}(buffer);' \
-                   f'buffer += {self._size};'
+            return f'{destination} = protocol_read_{self._name}(data);' \
+                   f'data += {self._size};'
 
     def gen_write_code(self, source: str) -> str:
         if self.is_variable():
-            return f'write_size = protocol_write_{self._name}(buffer, size, &{source});' \
+            return f'write_size = protocol_write_{self._name}(data, size, &{source});' \
                    f'if (write_size < 0) return -1;' \
-                   f'buffer += write_size;' \
+                   f'data += write_size;' \
                    f'size -= write_size;'
         else:
-            return f'protocol_write_{self._name}(buffer, &{source});' \
-                   f'buffer += {self._size};'
+            return f'protocol_write_{self._name}(data, &{source});' \
+                   f'data += {self._size};'
 
     def gen_definition_code(self) -> str:
         return f'{self._name}_t'
@@ -87,23 +88,23 @@ class ProtoDefNative(ProtoDefBase):
 
     def gen_read_code(self, destination: str) -> str:
         if self.is_variable():
-            return f'read_size = protocol_read_{self._name}(buffer, size, &{destination});' \
+            return f'read_size = protocol_read_{self._name}(data, size, &{destination});' \
                    f'if (read_size < 0) return -1;' \
-                   f'buffer += read_size;' \
+                   f'data += read_size;' \
                    f'size -= read_size;'
         else:
-            return f'{destination} = protocol_read_{self._name}(buffer);' \
-                   f'buffer += {self._size};'
+            return f'{destination} = protocol_read_{self._name}(data);' \
+                   f'data += {self._size};'
 
     def gen_write_code(self, source: str) -> str:
         if self.is_variable():
-            return f'write_size = protocol_write_{self._name}(buffer, size, {source});' \
+            return f'write_size = protocol_write_{self._name}(data, size, {source});' \
                    f'if (write_size < 0) return -1;' \
-                   f'buffer += write_size;' \
+                   f'data += write_size;' \
                    f'size -= write_size;'
         else:
-            return f'protocol_write_{self._name}(buffer, {source});' \
-                   f'buffer += {self._size};'
+            return f'protocol_write_{self._name}(data, {source});' \
+                   f'data += {self._size};'
 
     def gen_definition_code(self) -> str:
         return self._ctype
@@ -125,7 +126,7 @@ def access_field(source: str, name: str):
     if name == '':
         return source
 
-    if '->' in source or '[' in source:
+    if '->' in source or '[' in source or '*' in source:
         return source + '.' + name
     else:
         return source + '->' + name
@@ -220,7 +221,7 @@ class ProtoDefSwitch(ProtoDefBase):
                     default_typ = typ
                     default_name = name
                     continue
-                c += f'if (arrlen({access_field(get_parent_field(destination), compare_to_name)}) == {len(value)} && strncmp("{value}", {access_field(get_parent_field(destination), compare_to_name)}, {len(value)}) == 0) '
+                c += f'if ({access_field(get_parent_field(destination), compare_to_name)}.length == {len(value)} && strncmp("{value}", {access_field(get_parent_field(destination), compare_to_name)}.elements, {len(value)}) == 0) '
                 c += '{'
                 if not isinstance(typ, ProtoDefVoid):
                     if not typ.is_variable():
@@ -286,7 +287,7 @@ class ProtoDefSwitch(ProtoDefBase):
                     default_typ = typ
                     default_name = name
                     continue
-                c += f'if (arrlen({access_field(get_parent_field(source), compare_to_name)}) == {len(value)} && strncmp("{value}", {access_field(get_parent_field(source), compare_to_name)}, {len(value)}) == 0) '
+                c += f'if ({access_field(get_parent_field(source), compare_to_name)}.length == {len(value)} && strncmp("{value}", {access_field(get_parent_field(source), compare_to_name)}.elements, {len(value)}) == 0) '
                 c += '{'
                 if not isinstance(typ, ProtoDefVoid):
                     if not typ.is_variable():
@@ -459,20 +460,31 @@ class ProtoDefArray(ProtoDefBase):
         c = ''
         c += '{'
 
-        c += f'int arr_size = 0;'
-        if not self._count_type.is_variable():
-            c += f'if ({self._count_type.get_size()} > size) return -1;'
-            c += f'size -= {self._count_type.get_size()};'
-        c += self._count_type.gen_read_code('arr_size')
+        length_access = access_field(destination, "length")
+        elements_access = access_field(destination, "elements")
 
-        if not self._element_type.is_variable():
-            c += f'if (arr_size * {self._element_type.get_size()} > size) return -1;'
-            c += f'size -= arr_size * {self._element_type.get_size()};'
+        if self._count_type is not None:
+            if not self._count_type.is_variable():
+                c += f'if ({self._count_type.get_size()} > size) return -1;'
+                c += f'size -= {self._count_type.get_size()};'
+            c += self._count_type.gen_read_code(length_access)
+        else:
+            # This is a rest data, it goes all the way to the end
+            # of the packet unconditionally
+            c += f'{length_access} = size / sizeof({self._element_type.get_size()});'
+            c += f'size -= {length_access};'
 
-        c += f'arrsetlen({destination}, arr_size);'
-        c += 'for (int i = 0; i < arr_size; i++)'
+        if self._count_type is not None:
+            if not self._element_type.is_variable():
+                c += f'if ({length_access} * {self._element_type.get_size()} > size) return -1;'
+                c += f'size -= {length_access} * {self._element_type.get_size()};'
+
+        c += f'{elements_access} = packet_arena_alloc_unlocked(arena, {length_access} * sizeof(*{elements_access}));'
+        c += f'if ({elements_access} == NULL) return -1;'
+        i = 'i' + str(random.randint(0, 1000))
+        c += f'for (int {i} = 0; {i} < {length_access}; {i}++)'
         c += '{'
-        c += self._element_type.gen_read_code(f'{destination}[i]')
+        c += self._element_type.gen_read_code(f'{elements_access}[{i}]')
         c += '};'
 
         c += '};'
@@ -482,24 +494,38 @@ class ProtoDefArray(ProtoDefBase):
         c = ''
         c += '{'
 
-        c += f'int arr_size = arrlen({source});'
-        if not self._count_type.is_variable():
-            c += f'if ({self._count_type.get_size()} > size) return -1;'
-            c += f'size -= {self._count_type.get_size()};'
-        c += self._count_type.gen_write_code('arr_size')
+        length_access = access_field(source, "length")
+        elements_access = access_field(source, "elements")
+
+        if self._count_type is not None:
+            if not self._count_type.is_variable():
+                c += f'if ({self._count_type.get_size()} > size) return -1;'
+                c += f'size -= {self._count_type.get_size()};'
+            c += self._count_type.gen_write_code(length_access)
 
         if not self._element_type.is_variable():
-            c += f'if (arr_size * {self._element_type.get_size()} > size) return -1;'
-            c += f'size -= arr_size * {self._element_type.get_size()};'
+            c += f'if ({length_access} * {self._element_type.get_size()} > size) return -1;'
+            c += f'size -= {length_access} * {self._element_type.get_size()};'
 
-        c += 'for (int i = 0; i < arr_size; i++) {'
-        c += self._element_type.gen_write_code(f'{source}[i]')
+        i = 'i' + str(random.randint(0, 1000))
+        c += f'for (int {i} = 0; {i} < {length_access}; {i}++)'
+        c += '{'
+        c += self._element_type.gen_write_code(f'{elements_access}[{i}]')
         c += '};'
         c += '};'
         return c
 
     def gen_definition_code(self) -> str:
-        return f'{self._element_type.gen_definition_code()}*'
+        # return f'{self._element_type.gen_definition_code()}*'
+        c = ''
+        c += 'struct {'
+        if self._count_type is None:
+            c += f'int length;'
+        else:
+            c += f'{self._count_type.gen_definition_code()} length;'
+        c += f'{self._element_type.gen_definition_code()}* elements;'
+        c += '}'
+        return c
 
     def __repr__(self):
         return f'ProtoDefArray(count_type={repr(self._count_type)}, element_type={repr(self._element_type)})'
@@ -529,8 +555,8 @@ class ProtoDefBitfield(ProtoDefBase):
 
     def gen_read_code(self, destination: str) -> str:
         c = '{'
-        c += f'uint{self.get_size() * 8}_t packed_value = protocol_read_u{self.get_size() * 8}(buffer);'
-        c += f'buffer += {self.get_size()};'
+        c += f'uint{self.get_size() * 8}_t packed_value = protocol_read_u{self.get_size() * 8}(data);'
+        c += f'data += {self.get_size()};'
         offset = 0
         for field in self._fields:
             name, size, _ = field
@@ -547,8 +573,8 @@ class ProtoDefBitfield(ProtoDefBase):
             name, size, _ = field
             c += f'packed_value |= ((uint{self.get_size() * 8}_t){access_field(source, name)} & {hex((1 << size) - 1)}) << {offset};'
             offset += size
-        c += f'protocol_write_u{self.get_size() * 8}(buffer, packed_value);'
-        c += f'buffer += {self.get_size()};'
+        c += f'protocol_write_u{self.get_size() * 8}(data, packed_value);'
+        c += f'data += {self.get_size()};'
         c += '};'
         return c
 
@@ -572,8 +598,8 @@ class ProtoDefOption(ProtoDefBase):
         # Insert the present boolean
         c += 'if (size < 1) return -1;'
         c += 'size--;'
-        c += f'{access_field(destination, "present")} = protocol_read_u8(buffer);'
-        c += 'buffer++;'
+        c += f'{access_field(destination, "present")} = protocol_read_u8(data);'
+        c += 'data++;'
 
         # Now insert the field if needed
         c += f'if ({access_field(destination, "present")})'
@@ -590,8 +616,8 @@ class ProtoDefOption(ProtoDefBase):
         # Insert the present boolean
         c += 'if (size < 1) return -1;'
         c += 'size--;'
-        c += f'protocol_write_u8(buffer, {access_field(source, "present")});'
-        c += 'buffer++;'
+        c += f'protocol_write_u8(data, {access_field(source, "present")});'
+        c += 'data++;'
 
         # Now insert the field if needed
         c += f'if ({access_field(source, "present")})'
@@ -627,7 +653,8 @@ TYPES = {
     'varlong': ProtoDefNative('varlong', 'int64_t', -1),
     'void': ProtoDefVoid(),
     'nbt': ProtoDefNative('nbt', 'nbt_t', -1),
-    'optionalNbt': ProtoDefNative('nbt', 'nbt_t', -1)
+    'optionalNbt': ProtoDefNative('nbt', 'nbt_t', -1),
+    'restBuffer': ProtoDefArray(None, ProtoDefNative('u8', 'uint8_t', 1))
 }
 
 
@@ -695,16 +722,16 @@ def generate_write(name: str, typ: ProtoDefBase):
             source = '(*packet)'
 
         if typ.is_variable():
-            h = f'int protocol_write_{name}(uint8_t* buffer, int size, {name}_t* packet);'
+            h = f'int protocol_write_{name}(uint8_t* data, int size, {name}_t* packet);'
 
-            c = f'int protocol_write_{name}(uint8_t* buffer, int size, {name}_t* packet)'
+            c = f'int protocol_write_{name}(uint8_t* data, int size, {name}_t* packet)'
             c += ' {'
             c += 'int original_size = size;'
             c += 'int write_size;'
         else:
-            h = f'void protocol_write_{name}(uint8_t* buffer, {name}_t* packet);'
+            h = f'void protocol_write_{name}(uint8_t* data, {name}_t* packet);'
 
-            c = f'void protocol_write_{name}(uint8_t* buffer, {name}_t* packet)'
+            c = f'void protocol_write_{name}(uint8_t* data, {name}_t* packet)'
             c += ' {'
 
         c += typ.gen_write_code(source)
@@ -727,18 +754,20 @@ def generate_read(name: str, typ: ProtoDefBase):
             else:
                 source = '(*packet)'
 
-            h = f'int protocol_read_{name}(uint8_t* buffer, int size, {name}_t* packet);'
+            h = f'int protocol_read_{name}(packet_arena_t* arena, uint8_t* data, int size, {name}_t* packet);'
 
-            c = f'int protocol_read_{name}(uint8_t* buffer, int size, {name}_t* packet)'
+            c = f'int protocol_read_{name}(packet_arena_t* arena, uint8_t* data, int size, {name}_t* packet)'
             c += ' {'
+            c += '(void)arena;'
             c += 'int original_size = size;'
-            c += 'int read_size;'
+            c += 'int read_size = 0;'
+            c += '(void)read_size;'
             c += typ.gen_read_code(source)
             c += 'return original_size - size;'
         else:
-            h = f'{name}_t protocol_read_{name}(uint8_t* buffer);'
+            h = f'{name}_t protocol_read_{name}(uint8_t* data);'
 
-            c = f'{name}_t protocol_read_{name}(uint8_t* buffer)'
+            c = f'{name}_t protocol_read_{name}(uint8_t* data)'
             c += ' {'
             c += f'{name}_t packet;'
             c += typ.gen_read_code('(&packet)')
@@ -941,21 +970,22 @@ def generate_packet_parser(protocol, phase, code, header):
         header.append(f'err_t process_{name}(client_t* client, {name}_t* packet);')
 
         c = ''
-        c += f'err_t dispatch_{name}(client_t* client, uint8_t* buffer, int size)'
+        c += f'err_t dispatch_{name}(client_t* client, uint8_t* data, int size)'
         c += '{'
         c += 'err_t err = NO_ERROR;'
         c += f'{name}_t packet = {{ 0 }};'
         if typ.is_variable():
-            c += f'int read_size = protocol_read_{name}(buffer, size, &packet);'
+            c += 'packet_arena_t* arena = get_packet_arena();'
+            c += f'int read_size = protocol_read_{name}(arena, data, size, &packet);'
             c += f'CHECK_ERROR(read_size == size, ERROR_PROTOCOL, "Got a packet that is bigger than expected!");'
         else:
-            c += f'packet = protocol_read_{name}(buffer, size);'
+            c += f'packet = protocol_read_{name}(data, size);'
         c += '\n'
-        c += f'process_{name}(client, &packet);'
+        c += f'CHECK_AND_RETHROW(process_{name}(client, &packet));'
         c += '\n'
         c += 'cleanup:\n'
         if typ.is_variable():
-            c += '// TODO: free the packet\n'
+            c += 'return_packet_arena(arena);'
         c += 'return err;'
         c += '}'
         code.append(beautify(c))
@@ -965,25 +995,25 @@ def generate_packet_parser(protocol, phase, code, header):
 
 def generate_dispatcher(protocol, code, header):
     generate_packet_parser(protocol, 'handshaking', code, header)
-    # generate_packet_parser(protocol, 'status', code, header)
-    # generate_packet_parser(protocol, 'login', code, header)
+    generate_packet_parser(protocol, 'status', code, header)
+    generate_packet_parser(protocol, 'login', code, header)
     # generate_packet_parser(protocol, 'play', code, header)
 
     c = ''
-    c += 'err_t dispatch_packet(client_t* client, uint8_t* buffer, int size) {'
+    c += 'err_t dispatch_packet(client_t* client, uint8_t* data, int size) {'
     c += 'err_t err = NO_ERROR;'
     c += '\n'
     c += 'int packet_id = 0;'
-    c += 'int read_size = protocol_read_varint(buffer, size, &packet_id);'
+    c += 'int read_size = protocol_read_varint(data, size, &packet_id);'
     c += 'CHECK_ERROR(read_size >= 0, ERROR_PROTOCOL, "Packet id was not a valid varint");'
-    c += 'buffer += read_size;'
+    c += 'data += read_size;'
     c += 'size -= read_size;'
     c += '\n'
     c += 'switch (client->state) {'
     for phase in [
         'handshaking',
-        # 'status',
-        # 'login',
+        'status',
+        'login',
         # 'play'
     ]:
         mapper = protocol[phase]['toServer']['types']['packet'][1][0]['type'][1]['mappings']
@@ -992,7 +1022,7 @@ def generate_dispatcher(protocol, code, header):
         for id in mapper:
             if mapper[id] in {'legacy_server_list_ping'}:
                 continue
-            c += f'case {id}: {{CHECK_AND_RETHROW(dispatch_{phase}_packet_{mapper[id]}(client, buffer, size));}} break;'
+            c += f'case {id}: {{CHECK_AND_RETHROW(dispatch_{phase}_packet_{mapper[id]}(client, data, size));}} break;'
         c += 'default: CHECK_FAIL_ERROR(ERROR_PROTOCOL, "Got unknown packet id: %d", packet_id);'
         c += '}\n'
         c += '} break;'
@@ -1023,6 +1053,7 @@ h += '\n'
 h += '// This file is automatically generated by protodef.py\n'
 h += '// Do not modify this file -- YOUR CHANGES WILL BE ERASED!\n'
 h += '\n'
+h += '#include <minecraft/protocol/packet_arena.h>\n'
 h += '#include <minecraft/protocol/protocol.h>\n'
 h += '#include <minecraft/protocol/nbt.h>\n'
 h += '\n'
@@ -1032,7 +1063,7 @@ h += '\n'
 h += '#include <stdbool.h>\n'
 h += '#include <stdint.h>\n'
 h += '\n'
-h += 'err_t dispatch_packet(client_t* client, uint8_t* buffer, int size);\n'
+h += 'err_t dispatch_packet(client_t* client, uint8_t* data, int size);\n'
 h += '\n'
 h += header + '\n'
 
@@ -1044,7 +1075,6 @@ c += '\n'
 c += '// For simplified code gen\n'
 c += '#pragma GCC diagnostic ignored "-Wswitch-bool"\n'
 c += '\n'
-c += '#include <lib/stb_ds.h>\n'
 c += '#include <string.h>\n'
 c += '\n'
 c += code + '\n'

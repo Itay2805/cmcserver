@@ -26,7 +26,7 @@ typedef struct server_config {
     uint16_t max_server_list_pending;
 
     /**
-     * The buffer size used for the tcp recv, this is much lower than the max recv packet
+     * The data size used for the tcp recv, this is much lower than the max recv packet
      * size because tcp packets usually only transmit low amount of data, so no need to use
      * large buffers for this part
      */

@@ -3,7 +3,7 @@
 #include <stdbool.h>
 
 /**
- * Get a recv buffer for a packet, this is always
+ * Get a recv data for a packet, this is always
  * @return
  */
 void* buffer_pool_get_protocol_recv();

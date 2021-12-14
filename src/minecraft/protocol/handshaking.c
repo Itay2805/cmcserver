@@ -8,10 +8,6 @@
 err_t process_handshaking_packet_set_protocol(client_t* client, handshaking_packet_set_protocol_t* packet) {
     err_t err = NO_ERROR;
 
-    TRACE("Got a new client handshake:");
-    TRACE("\tprotocol version: %d", packet->protocol_version);
-    TRACE("\tserver: %s:%d", packet->server_host, packet->server_port);
-
     switch (packet->next_state) {
         case PROTOCOL_STATUS: {
             // nothing else to do here

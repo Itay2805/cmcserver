@@ -31,7 +31,7 @@ typedef struct request {
             struct iovec vecs[3];
             size_t vecs_count;
 
-            // and additionally we have a buffer
+            // and additionally we have a data
             // for the varints that need to be sent
             uint8_t varint_temp[5 * 2];
         } send;
@@ -271,7 +271,7 @@ err_t server_start() {
                         // disconnected
                         disconnect_client(client);
                     } else {
-                        // the send is done, return the buffer used for actually
+                        // the send is done, return the data used for actually
                         // sending the data
                         buffer_pool_return_protocol_send(request->send.vecs[request->send.vecs_count - 1].iov_base);
                     }

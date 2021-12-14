@@ -28,7 +28,7 @@ typedef struct client {
     protocol_state_t state;
 
     /**
-     * The buffer used for recv
+     * The data used for recv
      */
     uint8_t* recv_buffer;
 } client_t;

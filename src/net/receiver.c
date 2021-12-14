@@ -33,6 +33,7 @@ err_t receiver_consume_data(client_t* client, uint8_t* data, size_t len) {
     while (len > 0) {
         FETCHER_BEGIN
             receiver_state->varint.length = 0;
+            receiver_state->packet_length = 0;
             while (true) {
                 // fetch the byte
                 if (len == 0) FETCHER_RETURN;
@@ -54,7 +55,7 @@ err_t receiver_consume_data(client_t* client, uint8_t* data, size_t len) {
             }
 
             if (receiver_state->packet_length <= len) {
-                // fast path, we can use the buffer directly because the packet
+                // fast path, we can use the data directly because the packet
                 // is small enough to fit in it
                 receiver_state->packet = data;
                 data += receiver_state->packet_length;
@@ -104,7 +105,7 @@ err_t receiver_consume_data(client_t* client, uint8_t* data, size_t len) {
             CHECK_AND_RETHROW(dispatch_packet(client, receiver_state->packet, receiver_state->packet_length));
 
             // we no longer have a use for this packet, return it if
-            // it was allocated from the buffer pool
+            // it was allocated from the data pool
             if (receiver_state->should_return) {
                 buffer_pool_return_protocol_send(receiver_state->packet);
                 receiver_state->packet = NULL;
@@ -118,7 +119,7 @@ err_t receiver_consume_data(client_t* client, uint8_t* data, size_t len) {
 
 cleanup:
     if (IS_ERROR(err)) {
-        // free any buffer we may have allocated
+        // free any data we may have allocated
         if (receiver_state->should_return) {
             buffer_pool_return_protocol_send(receiver_state->packet);
             receiver_state->packet = NULL;
