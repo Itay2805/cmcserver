@@ -13,7 +13,7 @@ DEBUG ?= 0
 
 CC 		:= gcc
 
-CFLAGS 	:= -Wall -Werror -Wno-format
+CFLAGS 	:= -Wall -Werror -Wno-format -Wno-unused-label
 CFLAGS 	+= -O2 -flto -g
 
 LDFLAGS := $(CFLAGS)

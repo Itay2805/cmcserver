@@ -5,7 +5,7 @@
 // TODO: parse from json
 #define PROTOCOL_VERSION 757
 
-err_t process_handshaking_packet_set_protocol(client_t* client, handshaking_packet_set_protocol_t* packet) {
+err_t process_handshaking_packet_set_protocol(tick_arena_t* arena, client_t* client, handshaking_packet_set_protocol_t* packet) {
     err_t err = NO_ERROR;
 
     switch (packet->next_state) {
@@ -17,11 +17,11 @@ err_t process_handshaking_packet_set_protocol(client_t* client, handshaking_pack
             // check the version is valid
             if (packet->protocol_version != PROTOCOL_VERSION) {
                 // TODO: disconnect gracefully
-                CHECK_FAIL();
+                CHECK_FAIL_ERROR(ERROR_PROTOCOL, "Client with invalid protocol version: %d", packet->protocol_version);
             }
         } break;
 
-        default: CHECK_FAIL();
+        default: CHECK_FAIL_ERROR(ERROR_PROTOCOL, "Client sent invalid next state: %d", packet->next_state);
     }
 
     // advance

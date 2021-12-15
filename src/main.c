@@ -1,6 +1,6 @@
 #include "lib/except.h"
 
-#include <minecraft/protocol/packet_arena.h>
+#include <minecraft/tick_arena.h>
 #include <minecraft/game.h>
 
 #include <net/server.h>
@@ -14,7 +14,7 @@ int main() {
 
     init_err_printf();
     TRACE("Initializing server");
-    CHECK_AND_RETHROW(init_packet_arenas());
+    CHECK_AND_RETHROW(init_tick_arenas());
     CHECK_AND_RETHROW(start_game_loop());
 
     TRACE("Starting server!");

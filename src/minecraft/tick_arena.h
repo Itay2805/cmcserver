@@ -6,7 +6,7 @@
 #include <sync/spin_lock.h>
 #include <lib/except.h>
 
-typedef struct packet_arena {
+typedef struct tick_arena {
     // TODO: arena related stuff
     uint8_t* start;
     size_t current_offset;
@@ -20,31 +20,31 @@ typedef struct packet_arena {
     // this arena, used to sync on switch
     // packet arenas
     alignas(64) size_t users;
-} packet_arena_t;
+} tick_arena_t;
 
 /**
  * Initialize the packet arenas
  */
-err_t init_packet_arenas();
+err_t init_tick_arenas();
 
 /**
  * Switch between the arenas, done once a game tick
  *
  * Returns the arena to use for the current game tick
  */
-packet_arena_t* switch_packet_arenas();
+tick_arena_t* switch_tick_arenas();
 
 /**
  * Get an arena to use for the packet
  */
-packet_arena_t* get_packet_arena();
+tick_arena_t* get_tick_arena();
 
 /**
  * Return the arena, meaning we no longer going to allocate data from it
  *
- * @param arena [IN] The arena we got from the `get_packet_arena`
+ * @param arena [IN] The arena we got from the `get_tick_arena`
  */
-void return_packet_arena(packet_arena_t* arena);
+void return_tick_arena(tick_arena_t* arena);
 
 /**
  * Request data from the given arena
@@ -57,7 +57,7 @@ void return_packet_arena(packet_arena_t* arena);
  * @param arena     [IN] The arena to allocate from
  * @param size      [IN] The size to allocate
  */
-void* packet_arena_alloc_unlocked(packet_arena_t* arena, size_t size);
+void* tick_arena_alloc_unlocked(tick_arena_t* arena, size_t size);
 
 /**
  * Allocate data from the arena
@@ -65,4 +65,4 @@ void* packet_arena_alloc_unlocked(packet_arena_t* arena, size_t size);
  * @param arena     [IN] The arena to allocate from
  * @param size      [IN] The size to allocate
  */
-void* packet_arena_alloc(packet_arena_t* arena, size_t size);
+void* tick_arena_alloc(tick_arena_t* arena, size_t size);

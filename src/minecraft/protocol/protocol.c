@@ -109,15 +109,7 @@ int protocol_read_varint(uint8_t* buffer, int size, int32_t* value) {
 }
 
 int protocol_write_varint(uint8_t* buffer, int size, int32_t value) {
-    int original_size = size;
-    while (value & ~0x7f) {
-        if (size <= 0) return -1;
-        *buffer = (value & 0xFF) | 0x80;
-        buffer++;
-        size--;
-        value >>= 7;
-    }
-    return original_size - size;
+    return protocol_write_varlong(buffer, size, value);
 }
 
 int protocol_read_varlong(uint8_t* buffer, int size, int64_t* value) {
@@ -140,13 +132,25 @@ int protocol_read_varlong(uint8_t* buffer, int size, int64_t* value) {
 
 int protocol_write_varlong(uint8_t* buffer, int size, int64_t value) {
     int original_size = size;
-    while (value & ~0x7f) {
-        if (size <= 0) return -1;
-        *buffer = (value & 0xFF) | 0x80;
+
+    do {
+        // get the current byte and move the value
+        uint8_t current_byte = value & 0x7f;
+        value >>= 7;
+
+        if (value) {
+            // we have more bytes ahead
+            current_byte |= 0x80;
+        }
+
+        // push it
+        *buffer = current_byte;
         buffer++;
         size--;
-        value >>= 7;
-    }
+
+        // if no more values exit
+    } while (value);
+
     return original_size - size;
 }
 

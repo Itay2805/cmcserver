@@ -479,7 +479,7 @@ class ProtoDefArray(ProtoDefBase):
                 c += f'if ({length_access} * {self._element_type.get_size()} > size) return -1;'
                 c += f'size -= {length_access} * {self._element_type.get_size()};'
 
-        c += f'{elements_access} = packet_arena_alloc_unlocked(arena, {length_access} * sizeof(*{elements_access}));'
+        c += f'{elements_access} = tick_arena_alloc_unlocked(arena, {length_access} * sizeof(*{elements_access}));'
         c += f'if ({elements_access} == NULL) return -1;'
         i = 'i' + str(random.randint(0, 1000))
         c += f'for (int {i} = 0; {i} < {length_access}; {i}++)'
@@ -727,7 +727,8 @@ def generate_write(name: str, typ: ProtoDefBase):
             c = f'int protocol_write_{name}(uint8_t* data, int size, {name}_t* packet)'
             c += ' {'
             c += 'int original_size = size;'
-            c += 'int write_size;'
+            c += 'int write_size = 0;'
+            c += '(void)write_size;'
         else:
             h = f'void protocol_write_{name}(uint8_t* data, {name}_t* packet);'
 
@@ -754,9 +755,9 @@ def generate_read(name: str, typ: ProtoDefBase):
             else:
                 source = '(*packet)'
 
-            h = f'int protocol_read_{name}(packet_arena_t* arena, uint8_t* data, int size, {name}_t* packet);'
+            h = f'int protocol_read_{name}(tick_arena_t* arena, uint8_t* data, int size, {name}_t* packet);'
 
-            c = f'int protocol_read_{name}(packet_arena_t* arena, uint8_t* data, int size, {name}_t* packet)'
+            c = f'int protocol_read_{name}(tick_arena_t* arena, uint8_t* data, int size, {name}_t* packet)'
             c += ' {'
             c += '(void)arena;'
             c += 'int original_size = size;'
@@ -967,30 +968,70 @@ def generate_packet_parser(protocol, phase, code, header):
         code.append(c.strip())
         header.append(h.strip())
 
-        header.append(f'err_t process_{name}(client_t* client, {name}_t* packet);')
+        header.append(f'err_t process_{name}(tick_arena_t* arena, client_t* client, {name}_t* packet);')
 
         c = ''
         c += f'err_t dispatch_{name}(client_t* client, uint8_t* data, int size)'
         c += '{'
         c += 'err_t err = NO_ERROR;'
         c += f'{name}_t packet = {{ 0 }};'
+        c += 'tick_arena_t* arena = get_tick_arena();'
         if typ.is_variable():
-            c += 'packet_arena_t* arena = get_packet_arena();'
             c += f'int read_size = protocol_read_{name}(arena, data, size, &packet);'
             c += f'CHECK_ERROR(read_size == size, ERROR_PROTOCOL, "Got a packet that is bigger than expected!");'
         else:
             c += f'packet = protocol_read_{name}(data, size);'
         c += '\n'
-        c += f'CHECK_AND_RETHROW(process_{name}(client, &packet));'
+        c += f'CHECK_AND_RETHROW(process_{name}(arena, client, &packet));'
         c += '\n'
         c += 'cleanup:\n'
-        if typ.is_variable():
-            c += 'return_packet_arena(arena);'
+        c += 'return_tick_arena(arena);'
         c += 'return err;'
         c += '}'
         code.append(beautify(c))
 
-    return code, header
+
+def generate_packet_sender(protocol, phase, code, header):
+    packets = protocol[phase]['toClient']['types']
+    mappings = protocol[phase]['toClient']['types']['packet'][1][0]['type'][1]['mappings']
+    for packet_id in mappings:
+        packet_name = 'packet_' + mappings[packet_id]
+
+        name = phase + '_' + packet_name
+        typ = generate_type(packets[packet_name])
+
+        header.append(generate_definition(name, typ).strip())
+        c, h = generate_write(name, typ)
+        code.append(c.strip())
+        header.append(h.strip())
+
+        header.append(f'err_t send_{name}(client_t* client, {name}_t* packet);')
+
+        c = ''
+        c += f'err_t send_{name}(client_t* client, {name}_t* packet)'
+        c += '{'
+        c += 'err_t err = NO_ERROR;'
+        c += 'uint8_t* buffer = buffer_pool_get_protocol_send();'
+        c += '\n'
+        c += f'int pid_len = protocol_write_varint(buffer, g_server_config.max_send_packet_size, {packet_id});'
+        c += f'CHECK_ERROR(pid_len >= 0, ERROR_PROTOCOL, "Not enough space for packet!");'
+        c += '\n'
+        if typ.is_variable():
+            c += f'int packet_len = protocol_write_{name}(buffer + pid_len, g_server_config.max_send_packet_size - pid_len, packet);'
+            c += f'CHECK_ERROR(packet_len >= 0, ERROR_PROTOCOL, "Not enough space for packet!");'
+            c += '\n'
+            c += f'CHECK_AND_RETHROW(server_send_packet(client, buffer, pid_len + packet_len));'
+        else:
+            c += f'CHECK_ERROR(g_server_config.max_send_packet_size - pid_len >= {typ.get_size()}, ERROR_PROTOCOL, "Not enough space for packet!");'
+            c += f'protocol_write_{name}(buffer + pid_len, packet);'
+            c += '\n'
+            c += f'CHECK_AND_RETHROW(server_send_packet(client, buffer, {typ.get_size()}));'
+        c += '\n'
+        c += 'cleanup:\n'
+        c += 'if (IS_ERROR(err)) {buffer_pool_return_protocol_send(buffer);}\n'
+        c += 'return err;'
+        c += '}'
+        code.append(beautify(c))
 
 
 def generate_dispatcher(protocol, code, header):
@@ -998,6 +1039,10 @@ def generate_dispatcher(protocol, code, header):
     generate_packet_parser(protocol, 'status', code, header)
     generate_packet_parser(protocol, 'login', code, header)
     # generate_packet_parser(protocol, 'play', code, header)
+
+    generate_packet_sender(protocol, 'handshaking', code, header)
+    generate_packet_sender(protocol, 'status', code, header)
+    generate_packet_sender(protocol, 'login', code, header)
 
     c = ''
     c += 'err_t dispatch_packet(client_t* client, uint8_t* data, int size) {'
@@ -1042,6 +1087,36 @@ if len(sys.argv) != 4:
 path, header_path, code_path = sys.argv[1:]
 protocol = json.load(open(path))
 
+PROTOCOL_RENAMING = {
+    'status': {
+        'toClient': {
+            'packet_ping': 'packet_pong',
+        }
+    },
+    'login': {
+        'toServer': {
+            'packet_encryption_begin': 'packet_encryption_response'
+        },
+        'toClient': {
+            'packet_encryption_begin': 'packet_encryption_request'
+        }
+    }
+}
+
+for phase in PROTOCOL_RENAMING:
+    for side in PROTOCOL_RENAMING[phase]:
+        packets = protocol[phase][side]['types']
+        names = PROTOCOL_RENAMING[phase][side]
+        mappings = packets['packet'][1][0]['type'][1]['mappings']
+        for name in names:
+            assert name in packets
+            content = packets[name]
+            del packets[name]
+            packets[names[name]] = content
+            for id in mappings:
+                if mappings[id] == name[len('packet_'):]:
+                    mappings[id] = names[name][len('packet_'):]
+
 code, header = generate_base_types(protocol['types'])
 generate_dispatcher(protocol, code, header)
 
@@ -1053,9 +1128,9 @@ h += '\n'
 h += '// This file is automatically generated by protodef.py\n'
 h += '// Do not modify this file -- YOUR CHANGES WILL BE ERASED!\n'
 h += '\n'
-h += '#include <minecraft/protocol/packet_arena.h>\n'
 h += '#include <minecraft/protocol/protocol.h>\n'
 h += '#include <minecraft/protocol/nbt.h>\n'
+h += '#include <minecraft/tick_arena.h>\n'
 h += '\n'
 h += '#include <lib/except.h>\n'
 h += '#include <net/client.h>\n'
@@ -1074,6 +1149,9 @@ c += '// Do not modify this file -- YOUR CHANGES WILL BE ERASED!\n'
 c += '\n'
 c += '// For simplified code gen\n'
 c += '#pragma GCC diagnostic ignored "-Wswitch-bool"\n'
+c += '\n'
+c += '#include <net/buffer_pool.h>\n'
+c += '#include <net/server.h>\n'
 c += '\n'
 c += '#include <string.h>\n'
 c += '\n'

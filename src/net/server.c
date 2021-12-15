@@ -6,6 +6,7 @@
 #include <strings.h>
 #include <lib/stb_ds.h>
 #include <net/receiver.h>
+#include <sync/spin_lock.h>
 
 typedef enum request_type {
     REQUEST_ACCEPT,
@@ -53,6 +54,7 @@ static server_config_t m_default_config = {
     .max_server_list_pending = 512,
     .recv_buffer_size = 4096,
     .max_recv_packet_size = 65536,
+    .max_send_packet_size = 65536,
 };
 
 /**
@@ -82,6 +84,11 @@ server_config_t g_server_config = { 0 };
  * stuff to the io uring
  */
 static request_t** m_requests_pool = NULL;
+
+/**
+ * Guards against concurrent sends
+ */
+static spin_lock_t m_request_lock;
 
 err_t init_server(server_config_t* config) {
     err_t err = NO_ERROR;
@@ -119,11 +126,17 @@ cleanup:
 }
 
 static request_t* get_request() {
+    request_t* req = NULL;
+
+    spin_lock_enter(&m_request_lock);
     if (arrlen(m_requests_pool) == 0) {
-        return calloc(1, sizeof(request_t));
+        req = calloc(1, sizeof(request_t));
     } else {
-        return arrpop(m_requests_pool);
+        req = arrpop(m_requests_pool);
     }
+    spin_lock_leave(&m_request_lock);
+
+    return req;
 }
 
 static err_t add_accept() {
@@ -189,6 +202,48 @@ static void disconnect_client(client_t* client) {
 
     // we can safely free the client now
     free(client);
+}
+
+err_t server_send_packet(client_t* client, uint8_t* buffer, int32_t size) {
+    err_t err = NO_ERROR;
+
+    // setup the request
+    request_t* request = get_request();
+    CHECK_ERRNO(request != NULL);
+    request->type = REQUEST_SEND;
+    request->send.client = client;
+
+    // TODO: compression support
+    if (client->receiver_state.compression) {
+        CHECK_FAIL("TODO: compression support");
+    } else {
+        // serialize the packet length
+        int length_len = protocol_write_varint(request->send.varint_temp, 5, size);
+        CHECK(length_len > 0);
+
+        // set the length base
+        request->send.vecs[0].iov_base = request->send.varint_temp;
+        request->send.vecs[0].iov_len = length_len;
+
+        // set the buffer base
+        request->send.vecs[1].iov_base = buffer;
+        request->send.vecs[1].iov_len = size;
+
+        // we have two vecs
+        request->send.vecs_count = 2;
+    }
+
+    // get an sqe
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
+    CHECK_ERRNO(sqe != NULL);
+
+    // setup the sqe for recv on the client
+    io_uring_prep_writev(sqe, client->socket, request->send.vecs, request->send.vecs_count, 0);
+    io_uring_sqe_set_flags(sqe, 0);
+    sqe->user_data = (uint64_t)request;
+
+cleanup:
+    return err;
 }
 
 err_t server_start() {
@@ -279,7 +334,9 @@ err_t server_start() {
             }
 
             // return the request to the pool until the next one is needed
+            spin_lock_enter(&m_request_lock);
             arrpush(m_requests_pool, request);
+            spin_lock_leave(&m_request_lock);
         }
         io_uring_cq_advance(&m_ring, count);
     }

@@ -4,6 +4,7 @@
 
 #include <liburing.h>
 #include <threads.h>
+#include "client.h"
 
 typedef struct server_config {
     /**
@@ -36,6 +37,11 @@ typedef struct server_config {
      * This is the max packet size for
      */
     size_t max_recv_packet_size;
+
+    /**
+     * The max size for outgoing packet
+     */
+    size_t max_send_packet_size;
 } server_config_t;
 
 /**
@@ -43,6 +49,26 @@ typedef struct server_config {
  */
 extern server_config_t g_server_config;
 
+/**
+ * Initialize the server with the given server config
+ *
+ * @param config    [IN] The config, NULL for default config
+ */
 err_t init_server(server_config_t* config);
 
+/**
+ * Start the server on the current thread
+ */
 err_t server_start();
+
+/**
+ * This sends a minecraft packet, the buffer should contain the packet id
+ * and the payload but not the length.
+ *
+ * This function will also handle compression if needed.
+ *
+ * @param client    [IN] The client to send to
+ * @param buffer    [IN] The buffer to send
+ * @param size      [IN] The size of the buffer to send
+ */
+err_t server_send_packet(client_t* client, uint8_t* buffer, int32_t size);
